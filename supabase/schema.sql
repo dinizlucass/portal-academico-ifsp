@@ -12,6 +12,7 @@
 CREATE TABLE IF NOT EXISTS public.profiles (
   id          UUID        PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   name        TEXT        NOT NULL DEFAULT '',
+  email       TEXT,
   role        TEXT        NOT NULL DEFAULT 'STUDENT' CHECK (role IN ('STUDENT', 'ADMIN')),
   registration TEXT,          -- matrícula ex: SP260001
   cpf         TEXT,
@@ -29,11 +30,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
-  INSERT INTO public.profiles (id, name, role)
+  INSERT INTO public.profiles (id, name, role, email)
   VALUES (
     NEW.id,
     COALESCE(NEW.raw_user_meta_data->>'name', NEW.email),
-    COALESCE(NEW.raw_user_meta_data->>'role', 'STUDENT')
+    COALESCE(NEW.raw_user_meta_data->>'role', 'STUDENT'),
+    NEW.email
   );
   RETURN NEW;
 END;
@@ -110,10 +112,12 @@ CREATE POLICY "boletos_own"   ON public.boletos FOR SELECT USING (student_id = a
 CREATE POLICY "boletos_admin" ON public.boletos FOR ALL
   USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
 
--- Documents: aluno crud nos seus; admin lê todos
-CREATE POLICY "documents_own"          ON public.documents FOR ALL    USING (student_id = auth.uid());
-CREATE POLICY "documents_admin_select" ON public.documents FOR SELECT
-  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
+-- Documents: aluno só visualiza os seus; admin tem controle total (upload/edição/exclusão)
+CREATE POLICY "documents_select_own" ON public.documents FOR SELECT
+  USING (student_id = auth.uid());
+CREATE POLICY "documents_admin_all" ON public.documents FOR ALL
+  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'))
+  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
 
 -- Settings: aluno crud no seu registro
 CREATE POLICY "settings_own" ON public.settings FOR ALL USING (student_id = auth.uid());
@@ -153,15 +157,13 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('documentos', 'documentos', FALSE)
 ON CONFLICT (id) DO NOTHING;
 
--- Política Storage: aluno faz upload/download dos próprios arquivos
-CREATE POLICY "storage_own_insert" ON storage.objects FOR INSERT
-  WITH CHECK (bucket_id = 'documentos' AND auth.uid()::TEXT = (storage.foldername(name))[1]);
-
-CREATE POLICY "storage_own_select" ON storage.objects FOR SELECT
+-- Política Storage: aluno só visualiza/baixa a própria pasta; admin tem acesso total ao bucket
+CREATE POLICY "storage_select_own" ON storage.objects FOR SELECT
   USING (bucket_id = 'documentos' AND auth.uid()::TEXT = (storage.foldername(name))[1]);
 
-CREATE POLICY "storage_own_delete" ON storage.objects FOR DELETE
-  USING (bucket_id = 'documentos' AND auth.uid()::TEXT = (storage.foldername(name))[1]);
+CREATE POLICY "storage_admin_all" ON storage.objects FOR ALL
+  USING (bucket_id = 'documentos' AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'))
+  WITH CHECK (bucket_id = 'documentos' AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
 
 -- ============================================================
 -- FIM DO SCHEMA

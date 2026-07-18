@@ -20,7 +20,6 @@ import {
   FolderOpen,
   Settings,
   Trash2,
-  Eye,
   Bell,
   Globe,
   Shield,
@@ -33,9 +32,10 @@ import {
   Info,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { User, UserRole, Document, StudentSettings } from './types';
+import { User, UserRole, Document, StudentSettings, Boleto } from './types';
 import { INITIAL_USERS, ADS_COURSE } from './data/mockData';
 import { supabase, supabaseConfigured, supabaseIsolated } from './lib/supabase';
+import { generateStudentSubjects, generateBoletos } from './lib/random';
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -188,6 +188,49 @@ const Toggle = ({
   </button>
 );
 
+const ConfirmDialog = ({
+  open,
+  title,
+  message,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) => (
+  <AnimatePresence>
+    {open && (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      >
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.95, opacity: 0 }}
+          className="bg-white max-w-sm w-full p-6 shadow-xl"
+        >
+          <h3 className="font-black text-gray-800 mb-2">{title}</h3>
+          <p className="text-sm text-gray-500 mb-5">{message}</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={onCancel} className="px-4 py-2 text-sm font-bold text-gray-600 border border-gray-300 hover:bg-gray-50 transition-colors">
+              Cancelar
+            </button>
+            <button onClick={onConfirm} className="px-4 py-2 text-sm font-bold text-white bg-red-600 hover:bg-red-700 transition-colors">
+              Excluir
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+);
+
 // ─── Document type labels ─────────────────────────────────────
 const DOC_TYPES: Record<Document['type'], { label: string; icon: any; color: string }> = {
   carteirinha: { label: 'Carteirinha', icon: IdCard, color: 'text-blue-600' },
@@ -205,17 +248,23 @@ export default function App() {
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [allUsers, setAllUsers] = useState<User[]>(INITIAL_USERS);
+  const [allUsers, setAllUsers] = useState<User[]>(supabaseConfigured ? [] : INITIAL_USERS);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editForm, setEditForm] = useState<Partial<User>>({});
   const [newStudent, setNewStudent] = useState({ name: '', email: '', semester: 1 });
   const [adminMessage, setAdminMessage] = useState('');
+  const [resetMessage, setResetMessage] = useState('');
 
-  // Documents state
+  // Documents state (visão do próprio aluno)
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [docUploading, setDocUploading] = useState(false);
-  const [selectedDocType, setSelectedDocType] = useState<Document['type']>('carteirinha');
+
+  // Documents state (gestão pelo admin)
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [studentDocs, setStudentDocs] = useState<Document[]>([]);
+  const [adminDocType, setAdminDocType] = useState<Document['type']>('carteirinha');
+  const [adminDocUploading, setAdminDocUploading] = useState(false);
+  const [docToDelete, setDocToDelete] = useState<Document | null>(null);
 
   // Settings state
   const [settings, setSettings] = useState<StudentSettings>(DEFAULT_SETTINGS);
@@ -271,8 +320,13 @@ export default function App() {
           currentSemester: profile?.current_semester ?? 1,
           status: profile?.status ?? 'active',
         });
-        loadDocuments(data.user.id);
-        loadSettings(data.user.id);
+        if (role === UserRole.ADMIN) {
+          loadAllStudents();
+        } else {
+          loadDocuments(data.user.id);
+          loadSettings(data.user.id);
+          loadBoletos(data.user.id);
+        }
       }
     } else {
       // Mock fallback
@@ -299,31 +353,31 @@ export default function App() {
     },
   ];
 
-  const loadDocuments = async (userId: string) => {
-    if (!supabaseConfigured) return;
+  const fetchDocumentsFor = async (studentId: string): Promise<Document[]> => {
     const { data } = await supabase
       .from('documents')
       .select('*')
-      .eq('student_id', userId)
+      .eq('student_id', studentId)
       .order('created_at', { ascending: false });
-    if (data) {
-      setDocuments(
-        data.map(d => ({
-          id: d.id,
-          type: d.type,
-          name: d.name,
-          storagePath: d.storage_path,
-          fileSize: d.file_size,
-          mimeType: d.mime_type,
-          createdAt: d.created_at,
-        }))
-      );
-    }
+    return (data ?? []).map(d => ({
+      id: d.id,
+      type: d.type,
+      name: d.name,
+      storagePath: d.storage_path,
+      fileSize: d.file_size,
+      mimeType: d.mime_type,
+      createdAt: d.created_at,
+    }));
+  };
+
+  const loadDocuments = async (userId: string) => {
+    if (!supabaseConfigured) return;
+    setDocuments(await fetchDocumentsFor(userId));
   };
 
   const loadSettings = async (userId: string) => {
     if (!supabaseConfigured) return;
-    const { data } = await supabase.from('settings').select('*').eq('student_id', userId).single();
+    const { data } = await supabase.from('settings').select('*').eq('student_id', userId).maybeSingle();
     if (data) {
       setSettings({
         notifyBoletos: data.notify_boletos,
@@ -336,6 +390,67 @@ export default function App() {
     }
   };
 
+  const loadBoletos = async (studentId: string) => {
+    if (!supabaseConfigured) return;
+    const { data } = await supabase.from('boletos').select('*').eq('student_id', studentId).order('due_date');
+    if (data) {
+      const boletos: Boleto[] = data.map(b => ({
+        id: b.id,
+        description: b.description,
+        value: Number(b.value),
+        dueDate: b.due_date,
+        status: b.status,
+      }));
+      setUser(prev => (prev ? { ...prev, boletos } : prev));
+    }
+  };
+
+  const loadAllStudents = async () => {
+    if (!supabaseConfigured) return;
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('role', 'STUDENT')
+      .order('created_at', { ascending: false });
+    if (!profiles) return;
+
+    const ids = profiles.map(p => p.id);
+    let boletosByStudent: Record<string, Boleto[]> = {};
+    if (ids.length) {
+      const { data: boletosData } = await supabase.from('boletos').select('*').in('student_id', ids);
+      if (boletosData) {
+        boletosByStudent = boletosData.reduce((acc: Record<string, Boleto[]>, b) => {
+          (acc[b.student_id] ||= []).push({
+            id: b.id,
+            description: b.description,
+            value: Number(b.value),
+            dueDate: b.due_date,
+            status: b.status,
+          });
+          return acc;
+        }, {});
+      }
+    }
+
+    setAllUsers(
+      profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        email: p.email ?? '',
+        role: UserRole.STUDENT,
+        registration: p.registration,
+        cpf: p.cpf,
+        birthDate: p.birth_date,
+        phone: p.phone,
+        avatar: p.avatar_url,
+        courseId: p.course_id,
+        currentSemester: p.current_semester ?? 1,
+        status: p.status ?? 'active',
+        boletos: boletosByStudent[p.id] ?? [],
+      }))
+    );
+  };
+
   const handleLogout = async () => {
     if (supabaseConfigured) await supabase.auth.signOut();
     setUser(null);
@@ -344,7 +459,48 @@ export default function App() {
     setActiveTab('dashboard');
     setIsEditingProfile(false);
     setDocuments([]);
+    setAllUsers(supabaseConfigured ? [] : INITIAL_USERS);
     setSettings(DEFAULT_SETTINGS);
+  };
+
+  const handleForgotPassword = async (targetEmail: string) => {
+    if (!targetEmail) {
+      setResetMessage('Informe seu e-mail no campo acima para receber o link de redefinição.');
+      return;
+    }
+    if (!supabaseConfigured) {
+      setResetMessage('Redefinição de senha indisponível no modo demonstração.');
+      return;
+    }
+    await supabase.auth.resetPasswordForEmail(targetEmail);
+    setResetMessage('Se o e-mail informado existir em nossa base, enviaremos um link de redefinição.');
+  };
+
+  const handleBoletoReceipt = (boleto: Boleto) => {
+    const w = window.open('', '_blank', 'width=650,height=800');
+    if (!w) return;
+    w.document.write(`<!DOCTYPE html><html><head><title>Comprovante - ${boleto.description}</title>
+      <style>
+        body{font-family:Arial,sans-serif;padding:32px;color:#1f2937}
+        .header{border-bottom:3px solid #006b3f;padding-bottom:12px;margin-bottom:24px}
+        .header h1{font-size:16px;margin:0;color:#006b3f}
+        .header p{font-size:11px;color:#6b7280;margin:2px 0 0}
+        .row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:13px}
+        .label{color:#6b7280;font-weight:bold;text-transform:uppercase;font-size:10px}
+        .value{font-weight:bold}
+        .total{font-size:22px;color:#006b3f;font-weight:900;margin-top:16px}
+        .status{display:inline-block;padding:4px 10px;font-size:10px;font-weight:bold;text-transform:uppercase;background:${boleto.status === 'paid' ? '#d1fae5' : '#fee2e2'};color:${boleto.status === 'paid' ? '#065f46' : '#991b1b'}}
+      </style></head><body>
+        <div class="header"><h1>INSTITUTO FEDERAL DE SÃO PAULO</h1><p>Comprovante Financeiro · Uso interno</p></div>
+        <div class="row"><span class="label">Aluno</span><span class="value">${user?.name ?? ''}</span></div>
+        <div class="row"><span class="label">Matrícula</span><span class="value">${user?.registration ?? '—'}</span></div>
+        <div class="row"><span class="label">Descrição</span><span class="value">${boleto.description}</span></div>
+        <div class="row"><span class="label">Vencimento</span><span class="value">${new Date(boleto.dueDate).toLocaleDateString('pt-BR')}</span></div>
+        <div class="row"><span class="label">Situação</span><span class="status">${boleto.status === 'paid' ? 'Pago' : 'Pendente'}</span></div>
+        <p class="total">R$ ${boleto.value.toFixed(2)}</p>
+        <script>window.onload = () => window.print();</script>
+      </body></html>`);
+    w.document.close();
   };
 
   // ─── Profile ─────────────────────────────────────────────────
@@ -394,11 +550,30 @@ export default function App() {
       });
       if (error) { setAdminMessage('Erro: ' + error.message); return; }
       if (data.user) {
+        // A sessão do cliente isolado passa a ser a do aluno recém-criado,
+        // então a atualização do próprio perfil (curso/semestre) é feita por ele mesmo.
         await supabaseIsolated.from('profiles').update({
           current_semester: newStudent.semester,
           course_id: ADS_COURSE.id,
         }).eq('id', data.user.id);
-        setAdminMessage(`Aluno criado! Email: ${newStudent.email} · Senha provisória: Aluno@IFSP2026`);
+
+        // Boletos são inseridos pelo cliente principal (sessão do admin),
+        // que é quem tem permissão de escrita na tabela de boletos.
+        const boletoRows = generateBoletos(data.user.id).map(b => ({
+          student_id: data.user.id,
+          description: b.description,
+          value: b.value,
+          due_date: b.dueDate,
+          status: b.status,
+        }));
+        const { error: boletosError } = await supabase.from('boletos').insert(boletoRows);
+
+        if (boletosError) {
+          setAdminMessage(`Aluno criado, mas houve um erro ao gerar os boletos: ${boletosError.message}`);
+        } else {
+          setAdminMessage(`Aluno criado! Email: ${newStudent.email} · Senha provisória: Aluno@IFSP2026`);
+        }
+        await loadAllStudents();
       }
     } else {
       const student: User = {
@@ -420,16 +595,16 @@ export default function App() {
     setNewStudent({ name: '', email: '', semester: 1 });
   };
 
-  const toggleBoletoStatus = (studentId: string, boletoId: string) => {
+  const toggleBoletoStatus = async (studentId: string, boletoId: string) => {
+    const source = user?.id === studentId ? user.boletos : allUsers.find(u => u.id === studentId)?.boletos;
+    const current = source?.find(b => b.id === boletoId);
+    if (!current) return;
+    const newStatus: 'paid' | 'pending' = current.status === 'paid' ? 'pending' : 'paid';
+
     setAllUsers(prev =>
       prev.map(u => {
         if (u.id === studentId && u.boletos) {
-          return {
-            ...u,
-            boletos: u.boletos.map(b =>
-              b.id === boletoId ? { ...b, status: b.status === 'paid' ? 'pending' : 'paid' } : b
-            ),
-          };
+          return { ...u, boletos: u.boletos.map(b => (b.id === boletoId ? { ...b, status: newStatus } : b)) };
         }
         return u;
       })
@@ -437,87 +612,84 @@ export default function App() {
     if (user?.id === studentId) {
       setUser(prev => {
         if (!prev?.boletos) return prev;
-        return {
-          ...prev,
-          boletos: prev.boletos.map(b =>
-            b.id === boletoId ? { ...b, status: b.status === 'paid' ? 'pending' : 'paid' } : b
-          ),
-        };
+        return { ...prev, boletos: prev.boletos.map(b => (b.id === boletoId ? { ...b, status: newStatus } : b)) };
       });
+    }
+    if (supabaseConfigured) {
+      await supabase
+        .from('boletos')
+        .update({ status: newStatus, paid_at: newStatus === 'paid' ? new Date().toISOString() : null })
+        .eq('id', boletoId);
     }
   };
 
-  // ─── Documents ───────────────────────────────────────────────
+  // ─── Documents ──────────────────────────────────────────────
+  // Apenas o admin envia/exclui documentos. O aluno só visualiza e baixa os seus.
 
-  const handleDocUpload = useCallback(
+  const uploadDocumentFor = async (studentId: string, type: Document['type'], file: File): Promise<Document> => {
+    const path = `${studentId}/${Date.now()}_${file.name}`;
+    const { error: uploadError } = await supabase.storage.from('documentos').upload(path, file);
+    if (uploadError) throw uploadError;
+    const { data: dbData, error: dbError } = await supabase
+      .from('documents')
+      .insert({
+        student_id: studentId,
+        type,
+        name: file.name,
+        storage_path: path,
+        file_size: file.size,
+        mime_type: file.type,
+      })
+      .select()
+      .single();
+    if (dbError) throw dbError;
+    return {
+      id: dbData.id,
+      type: dbData.type,
+      name: dbData.name,
+      storagePath: dbData.storage_path,
+      fileSize: dbData.file_size,
+      mimeType: dbData.mime_type,
+      createdAt: dbData.created_at,
+    };
+  };
+
+  const deleteDocumentRecord = async (doc: Document) => {
+    await supabase.storage.from('documentos').remove([doc.storagePath]);
+    await supabase.from('documents').delete().eq('id', doc.id);
+  };
+
+  const handleSelectStudentForDocs = async (studentId: string) => {
+    setSelectedStudentId(studentId);
+    setStudentDocs(studentId && supabaseConfigured ? await fetchDocumentsFor(studentId) : []);
+  };
+
+  const handleAdminDocUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
-      if (!file || !user) return;
-      setDocUploading(true);
+      if (!file || !selectedStudentId) return;
+      setAdminDocUploading(true);
       try {
         if (supabaseConfigured) {
-          const path = `${user.id}/${Date.now()}_${file.name}`;
-          const { error: uploadError } = await supabase.storage
-            .from('documentos')
-            .upload(path, file);
-          if (uploadError) throw uploadError;
-          const { data: dbData, error: dbError } = await supabase.from('documents').insert({
-            student_id: user.id,
-            type: selectedDocType,
-            name: file.name,
-            storage_path: path,
-            file_size: file.size,
-            mime_type: file.type,
-          }).select().single();
-          if (dbError) throw dbError;
-          setDocuments(prev => [
-            {
-              id: dbData.id,
-              type: dbData.type,
-              name: dbData.name,
-              storagePath: dbData.storage_path,
-              fileSize: dbData.file_size,
-              mimeType: dbData.mime_type,
-              createdAt: dbData.created_at,
-            },
-            ...prev,
-          ]);
-        } else {
-          // Mock
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            setDocuments(prev => [
-              {
-                id: Math.random().toString(36).substr(2, 9),
-                type: selectedDocType,
-                name: file.name,
-                storagePath: '',
-                fileSize: file.size,
-                mimeType: file.type,
-                createdAt: new Date().toISOString(),
-                previewUrl: reader.result as string,
-              },
-              ...prev,
-            ]);
-          };
-          reader.readAsDataURL(file);
+          const doc = await uploadDocumentFor(selectedStudentId, adminDocType, file);
+          setStudentDocs(prev => [doc, ...prev]);
+          setAdminMessage(`Documento "${file.name}" enviado com sucesso.`);
         }
       } catch (err: any) {
-        console.error('Erro ao enviar:', err.message);
+        setAdminMessage('Erro ao enviar documento: ' + err.message);
       }
-      setDocUploading(false);
+      setAdminDocUploading(false);
       e.target.value = '';
     },
-    [user, selectedDocType]
+    [selectedStudentId, adminDocType]
   );
 
-  const handleDocDelete = async (doc: Document) => {
-    if (!confirm(`Excluir "${doc.name}"?`)) return;
-    if (supabaseConfigured) {
-      await supabase.storage.from('documentos').remove([doc.storagePath]);
-      await supabase.from('documents').delete().eq('id', doc.id);
-    }
-    setDocuments(prev => prev.filter(d => d.id !== doc.id));
+  const handleAdminDocDelete = async () => {
+    if (!docToDelete) return;
+    if (supabaseConfigured) await deleteDocumentRecord(docToDelete);
+    setStudentDocs(prev => prev.filter(d => d.id !== docToDelete.id));
+    setDocuments(prev => prev.filter(d => d.id !== docToDelete.id));
+    setDocToDelete(null);
   };
 
   const handleDocDownload = async (doc: Document) => {
@@ -557,8 +729,8 @@ export default function App() {
 
   const studentSubjects = useMemo(() => {
     if (!user || user.role !== UserRole.STUDENT) return [];
-    return ADS_COURSE.subjects;
-  }, [user]);
+    return generateStudentSubjects(ADS_COURSE, user.currentSemester ?? 1, user.id);
+  }, [user?.id, user?.role, user?.currentSemester]);
 
   const currentSemesterSubjects = studentSubjects.filter(s => s.semester === user?.currentSemester);
   const concludedSubjects = studentSubjects.filter(s => s.status === 'concluded');
@@ -616,6 +788,11 @@ export default function App() {
                     {loginError}
                   </div>
                 )}
+                {resetMessage && (
+                  <div className="bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-700">
+                    {resetMessage}
+                  </div>
+                )}
                 <div className="space-y-1">
                   <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
                     E-mail Institucional
@@ -630,7 +807,16 @@ export default function App() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Senha</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Senha</label>
+                    <button
+                      type="button"
+                      onClick={() => handleForgotPassword(email)}
+                      className="text-[11px] font-bold text-ifsp-green hover:underline"
+                    >
+                      Esqueci minha senha
+                    </button>
+                  </div>
                   <input
                     type="password"
                     required
@@ -1020,7 +1206,7 @@ export default function App() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
-                          {ADS_COURSE.subjects.filter(s => s.semester === sem).map(s => (
+                          {studentSubjects.filter(s => s.semester === sem).map(s => (
                             <tr key={s.id} className="hover:bg-gray-50">
                               <td className="py-3 font-medium text-gray-700">{s.name}</td>
                               <td className="py-3">
@@ -1080,7 +1266,11 @@ export default function App() {
                                   Pagar
                                 </button>
                               )}
-                              <button className="text-gray-400 hover:text-ifsp-green p-1 hover:bg-gray-100 transition-all inline-flex">
+                              <button
+                                onClick={() => handleBoletoReceipt(b)}
+                                className="text-gray-400 hover:text-ifsp-green p-1 hover:bg-gray-100 transition-all inline-flex"
+                                title="Baixar comprovante"
+                              >
                                 <Download size={16} />
                               </button>
                             </td>
@@ -1106,58 +1296,17 @@ export default function App() {
               <motion.div key="documents" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-5">
                 <div>
                   <h2 className="text-xl font-black text-gray-800">Meus Documentos</h2>
-                  <p className="text-sm text-gray-400">Armazene e acesse seus documentos acadêmicos.</p>
+                  <p className="text-sm text-gray-400">Documentos disponibilizados pela secretaria acadêmica.</p>
                 </div>
 
-                {/* Upload */}
-                <Card title="Enviar Documento" icon={Upload}>
-                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end">
-                    <div className="space-y-1 flex-1">
-                      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Tipo de Documento</label>
-                      <select
-                        value={selectedDocType}
-                        onChange={e => setSelectedDocType(e.target.value as Document['type'])}
-                        className="w-full px-3 py-2 border border-gray-300 outline-none focus:border-ifsp-green bg-white text-sm"
-                      >
-                        <option value="carteirinha">Carteirinha Estudantil</option>
-                        <option value="historico">Histórico Escolar</option>
-                        <option value="declaracao">Declaração de Matrícula</option>
-                        <option value="outros">Outros</option>
-                      </select>
-                    </div>
-                    <label className={`cursor-pointer flex items-center gap-2 px-5 py-2 font-bold text-sm border transition-colors ${
-                      docUploading
-                        ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                        : 'bg-ifsp-green text-white border-ifsp-green hover:bg-ifsp-green-dark'
-                    }`}>
-                      {docUploading ? (
-                        <><Clock size={15} className="animate-spin" /> Enviando...</>
-                      ) : (
-                        <><Upload size={15} /> Selecionar Arquivo</>
-                      )}
-                      <input
-                        type="file"
-                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                        className="hidden"
-                        onChange={handleDocUpload}
-                        disabled={docUploading}
-                      />
-                    </label>
-                  </div>
-                  <p className="text-[11px] text-gray-400 mt-3">
-                    Formatos aceitos: PDF, JPG, PNG, DOC, DOCX · Tamanho máximo: 10 MB
-                  </p>
-                </Card>
-
-                {/* List */}
                 {documents.length === 0 ? (
                   <div className="text-center py-16 text-gray-400 border border-dashed border-gray-200 bg-white">
                     <FolderOpen size={40} className="mx-auto mb-3 opacity-40" />
-                    <p className="font-bold text-sm">Nenhum documento enviado</p>
-                    <p className="text-xs mt-1">Use o formulário acima para adicionar documentos.</p>
+                    <p className="font-bold text-sm">Nenhum documento disponível</p>
+                    <p className="text-xs mt-1">Sua carteirinha, histórico e declarações aparecerão aqui assim que a secretaria os disponibilizar.</p>
                   </div>
                 ) : (
-                  <Card title={`Documentos Salvos (${documents.length})`} icon={FolderOpen}>
+                  <Card title={`Documentos Disponíveis (${documents.length})`} icon={FolderOpen}>
                     <div className="space-y-3">
                       {documents.map(doc => {
                         const meta = DOC_TYPES[doc.type];
@@ -1174,31 +1323,13 @@ export default function App() {
                                 {new Date(doc.createdAt).toLocaleDateString('pt-BR')}
                               </p>
                             </div>
-                            <div className="flex gap-1 shrink-0">
-                              {doc.previewUrl && (
-                                <button
-                                  onClick={() => window.open(doc.previewUrl, '_blank')}
-                                  className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                                  title="Visualizar"
-                                >
-                                  <Eye size={16} />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => handleDocDownload(doc)}
-                                className="p-1.5 text-gray-400 hover:text-ifsp-green hover:bg-green-50 transition-colors"
-                                title="Baixar"
-                              >
-                                <Download size={16} />
-                              </button>
-                              <button
-                                onClick={() => handleDocDelete(doc)}
-                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                                title="Excluir"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
+                            <button
+                              onClick={() => handleDocDownload(doc)}
+                              className="p-1.5 text-gray-400 hover:text-ifsp-green hover:bg-green-50 transition-colors shrink-0"
+                              title="Baixar"
+                            >
+                              <Download size={16} />
+                            </button>
                           </div>
                         );
                       })}
@@ -1209,7 +1340,7 @@ export default function App() {
                 <div className="bg-gray-50 border border-gray-200 p-4 flex gap-3">
                   <Shield className="text-gray-400 shrink-0" size={16} />
                   <p className="text-xs text-gray-500">
-                    Seus documentos são armazenados com segurança e só você tem acesso. O IFSP não compartilha seus documentos com terceiros.
+                    Documentos oficiais como carteirinha, histórico escolar e declarações são emitidos e enviados exclusivamente pela secretaria acadêmica. Só você tem acesso aos seus arquivos.
                   </p>
                 </div>
               </motion.div>
@@ -1274,10 +1405,14 @@ export default function App() {
 
                 <Card title="Segurança" icon={Lock}>
                   <div className="space-y-3">
-                    <p className="text-sm text-gray-600">Para alterar sua senha, entre em contato com a secretaria acadêmica ou use o link abaixo.</p>
-                    <button className="text-sm font-bold text-ifsp-green hover:underline">
+                    <p className="text-sm text-gray-600">Enviaremos um link de redefinição de senha para o seu e-mail institucional.</p>
+                    <button
+                      onClick={() => handleForgotPassword(user.email)}
+                      className="text-sm font-bold text-ifsp-green hover:underline"
+                    >
                       Solicitar redefinição de senha →
                     </button>
+                    {resetMessage && <p className="text-xs text-emerald-600 font-bold">{resetMessage}</p>}
                   </div>
                 </Card>
 
@@ -1316,10 +1451,9 @@ export default function App() {
                   <div className="bg-amber-50 border border-amber-200 p-4 flex gap-3 text-sm">
                     <Info size={16} className="text-amber-600 shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-bold text-amber-800">Criação via Supabase Auth</p>
+                      <p className="font-bold text-amber-800">Senha provisória</p>
                       <p className="text-amber-700 text-xs mt-0.5">
-                        O cadastro abaixo cria o usuário diretamente no Supabase Auth com senha provisória <strong>Aluno@IFSP2026</strong>.
-                        A service_role key é necessária — use apenas no backend.
+                        Alunos cadastrados recebem a senha provisória <strong>Aluno@IFSP2026</strong> e devem alterá-la no primeiro acesso.
                       </p>
                     </div>
                   </div>
@@ -1381,7 +1515,23 @@ export default function App() {
                   </div>
 
                   <div className="lg:col-span-2">
-                    <Card title={`Lista de Alunos (${allUsers.filter(u => u.role === UserRole.STUDENT).length})`} icon={Users}>
+                    <Card
+                      title={`Lista de Alunos (${allUsers.filter(u => u.role === UserRole.STUDENT).length})`}
+                      icon={Users}
+                      action={
+                        supabaseConfigured && (
+                          <button
+                            onClick={() => loadAllStudents()}
+                            className="text-[10px] font-bold text-gray-400 hover:text-ifsp-green uppercase tracking-wider"
+                          >
+                            Atualizar
+                          </button>
+                        )
+                      }
+                    >
+                      {allUsers.filter(u => u.role === UserRole.STUDENT).length === 0 ? (
+                        <p className="text-sm text-gray-400 text-center py-8">Nenhum aluno cadastrado ainda.</p>
+                      ) : (
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-sm">
                           <thead>
@@ -1431,9 +1581,107 @@ export default function App() {
                           </tbody>
                         </table>
                       </div>
+                      )}
                     </Card>
                   </div>
                 </div>
+
+                <Card title="Documentos dos Alunos" icon={FolderOpen}>
+                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end mb-5">
+                    <div className="space-y-1 flex-1 w-full">
+                      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Aluno</label>
+                      <select
+                        value={selectedStudentId}
+                        onChange={e => handleSelectStudentForDocs(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 outline-none focus:border-ifsp-green bg-white text-sm"
+                      >
+                        <option value="">Selecione um aluno...</option>
+                        {allUsers.filter(u => u.role === UserRole.STUDENT).map(u => (
+                          <option key={u.id} value={u.id}>{u.name} {u.registration ? `— ${u.registration}` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Tipo</label>
+                      <select
+                        value={adminDocType}
+                        onChange={e => setAdminDocType(e.target.value as Document['type'])}
+                        disabled={!selectedStudentId}
+                        className="w-full px-3 py-2 border border-gray-300 outline-none focus:border-ifsp-green bg-white text-sm disabled:opacity-50"
+                      >
+                        <option value="carteirinha">Carteirinha Estudantil</option>
+                        <option value="historico">Histórico Escolar</option>
+                        <option value="declaracao">Declaração de Matrícula</option>
+                        <option value="outros">Outros</option>
+                      </select>
+                    </div>
+                    <label className={`cursor-pointer flex items-center gap-2 px-5 py-2 font-bold text-sm border transition-colors shrink-0 ${
+                      !selectedStudentId || adminDocUploading
+                        ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                        : 'bg-ifsp-green text-white border-ifsp-green hover:bg-ifsp-green-dark'
+                    }`}>
+                      {adminDocUploading ? (
+                        <><Clock size={15} className="animate-spin" /> Enviando...</>
+                      ) : (
+                        <><Upload size={15} /> Enviar Arquivo</>
+                      )}
+                      <input
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+                        className="hidden"
+                        onChange={handleAdminDocUpload}
+                        disabled={!selectedStudentId || adminDocUploading}
+                      />
+                    </label>
+                  </div>
+
+                  {!selectedStudentId ? (
+                    <p className="text-sm text-gray-400 text-center py-8 border border-dashed border-gray-200">
+                      Selecione um aluno para visualizar e gerenciar seus documentos.
+                    </p>
+                  ) : studentDocs.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-8 border border-dashed border-gray-200">
+                      Nenhum documento enviado para este aluno ainda.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {studentDocs.map(doc => {
+                        const meta = DOC_TYPES[doc.type];
+                        const Icon = meta.icon;
+                        return (
+                          <div key={doc.id} className="flex items-center gap-4 p-3 border border-gray-100 hover:border-gray-200 hover:bg-gray-50 transition-all">
+                            <div className={`p-2 bg-gray-50 ${meta.color}`}>
+                              <Icon size={20} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-bold text-gray-800 truncate">{doc.name}</p>
+                              <p className="text-[10px] text-gray-400 mt-0.5">
+                                {meta.label} · {doc.fileSize ? formatBytes(doc.fileSize) : '—'} ·{' '}
+                                {new Date(doc.createdAt).toLocaleDateString('pt-BR')}
+                              </p>
+                            </div>
+                            <div className="flex gap-1 shrink-0">
+                              <button
+                                onClick={() => handleDocDownload(doc)}
+                                className="p-1.5 text-gray-400 hover:text-ifsp-green hover:bg-green-50 transition-colors"
+                                title="Baixar"
+                              >
+                                <Download size={16} />
+                              </button>
+                              <button
+                                onClick={() => setDocToDelete(doc)}
+                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                                title="Excluir"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </Card>
               </motion.div>
             )}
 
@@ -1539,6 +1787,14 @@ export default function App() {
           </AnimatePresence>
         </main>
       </div>
+
+      <ConfirmDialog
+        open={!!docToDelete}
+        title="Excluir documento"
+        message={docToDelete ? `Tem certeza que deseja excluir "${docToDelete.name}"? Esta ação não pode ser desfeita.` : ''}
+        onConfirm={handleAdminDocDelete}
+        onCancel={() => setDocToDelete(null)}
+      />
     </div>
   );
 }
