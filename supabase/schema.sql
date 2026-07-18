@@ -101,23 +101,40 @@ ALTER TABLE public.boletos   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.settings  ENABLE ROW LEVEL SECURITY;
 
+-- Função auxiliar SECURITY DEFINER: checa se o usuário logado é admin.
+-- Necessária porque uma policy de profiles não pode fazer subquery direto
+-- em profiles (RLS reaciona a própria policy e causa recursão infinita).
+-- Rodando como SECURITY DEFINER, a consulta interna bypassa RLS.
+CREATE OR REPLACE FUNCTION public.is_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'ADMIN'
+  );
+$$;
+
 -- Profiles: usuário lê e atualiza o próprio; admin lê todos
 CREATE POLICY "profiles_select_own"   ON public.profiles FOR SELECT USING (auth.uid() = id);
 CREATE POLICY "profiles_update_own"   ON public.profiles FOR UPDATE USING (auth.uid() = id);
 CREATE POLICY "profiles_admin_select" ON public.profiles FOR SELECT
-  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
+  USING (public.is_admin());
 
--- Boletos: aluno vê os seus; admin vê todos
+-- Boletos: aluno vê os seus; admin tem CRUD completo
 CREATE POLICY "boletos_own"   ON public.boletos FOR SELECT USING (student_id = auth.uid());
 CREATE POLICY "boletos_admin" ON public.boletos FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
 
 -- Documents: aluno só visualiza os seus; admin tem controle total (upload/edição/exclusão)
 CREATE POLICY "documents_select_own" ON public.documents FOR SELECT
   USING (student_id = auth.uid());
 CREATE POLICY "documents_admin_all" ON public.documents FOR ALL
-  USING (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'))
-  WITH CHECK (EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
+  USING (public.is_admin())
+  WITH CHECK (public.is_admin());
 
 -- Settings: aluno crud no seu registro
 CREATE POLICY "settings_own" ON public.settings FOR ALL USING (student_id = auth.uid());
@@ -162,8 +179,8 @@ CREATE POLICY "storage_select_own" ON storage.objects FOR SELECT
   USING (bucket_id = 'documentos' AND auth.uid()::TEXT = (storage.foldername(name))[1]);
 
 CREATE POLICY "storage_admin_all" ON storage.objects FOR ALL
-  USING (bucket_id = 'documentos' AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'))
-  WITH CHECK (bucket_id = 'documentos' AND EXISTS (SELECT 1 FROM public.profiles p WHERE p.id = auth.uid() AND p.role = 'ADMIN'));
+  USING (bucket_id = 'documentos' AND public.is_admin())
+  WITH CHECK (bucket_id = 'documentos' AND public.is_admin());
 
 -- ============================================================
 -- FIM DO SCHEMA
