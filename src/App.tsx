@@ -254,6 +254,7 @@ export default function App() {
   const [editForm, setEditForm] = useState<Partial<User>>({});
   const [newStudent, setNewStudent] = useState({ name: '', email: '', semester: 1 });
   const [adminMessage, setAdminMessage] = useState('');
+  const [docError, setDocError] = useState('');
   const [resetMessage, setResetMessage] = useState('');
 
   // Documents state (visão do próprio aluno)
@@ -700,10 +701,23 @@ export default function App() {
       a.click();
       return;
     }
-    if (supabaseConfigured) {
-      const { data } = await supabase.storage.from('documentos').createSignedUrl(doc.storagePath, 60);
-      if (data?.signedUrl) window.open(data.signedUrl, '_blank');
+    if (!supabaseConfigured) return;
+    setDocError('');
+    const { data, error } = await supabase.storage.from('documentos').createSignedUrl(doc.storagePath, 60);
+    if (error || !data?.signedUrl) {
+      setDocError('Erro ao baixar documento: ' + (error?.message ?? 'link indisponível.'));
+      return;
     }
+    // Usar um <a> clicado programaticamente em vez de window.open — o navegador
+    // bloqueia popups abertos depois de um await, mesmo vindo de um clique real.
+    const a = document.createElement('a');
+    a.href = data.signedUrl;
+    a.download = doc.name;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   // ─── Settings ────────────────────────────────────────────────
@@ -1298,6 +1312,13 @@ export default function App() {
                   <h2 className="text-xl font-black text-gray-800">Meus Documentos</h2>
                   <p className="text-sm text-gray-400">Documentos disponibilizados pela secretaria acadêmica.</p>
                 </div>
+
+                {docError && (
+                  <div className="bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 flex items-start justify-between gap-2">
+                    <span>{docError}</span>
+                    <button onClick={() => setDocError('')} className="shrink-0 opacity-60 hover:opacity-100"><X size={12} /></button>
+                  </div>
+                )}
 
                 {documents.length === 0 ? (
                   <div className="text-center py-16 text-gray-400 border border-dashed border-gray-200 bg-white">
