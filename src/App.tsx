@@ -595,13 +595,7 @@ export default function App() {
             <div className="bg-white shadow-lg border-t-4 border-ifsp-green">
               <div className="px-8 pt-8 pb-6 text-center border-b border-gray-100">
                 <div className="flex justify-center mb-4">
-                  <svg className="h-20 w-auto" viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
-                    <rect x="0" y="0" width="80" height="80" rx="4" fill="#006837"/>
-                    <text x="40" y="52" textAnchor="middle" fill="white" fontSize="36" fontWeight="bold" fontFamily="Arial,sans-serif">IF</text>
-                    <text x="105" y="30" fill="#006837" fontSize="18" fontWeight="bold" fontFamily="Arial,sans-serif">Instituto</text>
-                    <text x="105" y="50" fill="#006837" fontSize="18" fontWeight="bold" fontFamily="Arial,sans-serif">Federal</text>
-                    <text x="105" y="70" fill="#006837" fontSize="12" fontFamily="Arial,sans-serif">de São Paulo</text>
-                  </svg>
+                  <img src="/ifsp-logo.svg" alt="IFSP" className="h-20 w-auto" />
                 </div>
                 <h1 className="text-lg font-black text-gray-800 uppercase tracking-wide">Portal de Sistemas</h1>
                 <p className="text-gray-500 text-sm mt-1">Instituto Federal de São Paulo</p>
@@ -695,13 +689,7 @@ export default function App() {
               {isSidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
             <div className="bg-white p-1.5 md:p-2 shrink-0">
-              <svg className="h-8 md:h-11 w-auto" viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
-                <rect x="0" y="0" width="80" height="80" rx="4" fill="#006837"/>
-                <text x="40" y="52" textAnchor="middle" fill="white" fontSize="36" fontWeight="bold" fontFamily="Arial,sans-serif">IF</text>
-                <text x="105" y="30" fill="#006837" fontSize="18" fontWeight="bold" fontFamily="Arial,sans-serif">Instituto</text>
-                <text x="105" y="50" fill="#006837" fontSize="18" fontWeight="bold" fontFamily="Arial,sans-serif">Federal</text>
-                <text x="105" y="70" fill="#006837" fontSize="12" fontFamily="Arial,sans-serif">de São Paulo</text>
-              </svg>
+              <img src="/ifsp-logo.svg" alt="IFSP" className="h-8 md:h-11 w-auto" />
             </div>
             <div>
               <p className="text-[10px] opacity-80 hidden sm:block">
